@@ -1,0 +1,13 @@
+# Java 
+target /**
+*.jar
+*.war
+*.ear
+*.class
+
+#eclipse specific
+.project
+.claspath
+.settings/
+.loadpath
+
