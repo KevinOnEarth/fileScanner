@@ -16,23 +16,58 @@
  */
 package org.kevin.processors.fileScanner;
 
+import static org.junit.Assert.assertTrue;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.NoSuchAlgorithmException;
+import java.util.List;
+
+import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
-
 
 public class VirusScanningProcessorTest {
 
     private TestRunner testRunner;
-
+    private final String VIRUS_FILE = "eicar.com";
+    private final String CLEAN_FILE = "cleanFile.txt";
+    
     @Before
     public void init() {
         testRunner = TestRunners.newTestRunner(VirusScanningProcessor.class);
+        testRunner.setProperty("VIRUS_SCANNER_IP", "172.17.0.2");
+        testRunner.setProperty("VIRUS_SCANNER_PORT", "3310");
     }
-
+    @Ignore
     @Test
-    public void testProcessor() {
+    public void testProcessorVirusFile() throws NoSuchAlgorithmException {
+    	try (InputStream virusFile = getClass().getClassLoader().getResourceAsStream(VIRUS_FILE)) {
+    		testRunner.enqueue(virusFile);
+    		testRunner.run(1);
+    		testRunner.assertQueueEmpty();
+    		List<MockFlowFile> results = testRunner.getFlowFilesForRelationship(VirusScanningProcessor.VIRUS_FOUND);
+    		assertTrue("1 match", results.size() == 1);
+    		results.get(0).assertAttributeExists("Virus List");
+    	} catch (IOException e) {
+			e.printStackTrace();
+		}
+    }
+    @Ignore
+    @Test
+    public void testProcessorCleanFile() {
+    	try (InputStream cleanFile = getClass().getClassLoader().getResourceAsStream(CLEAN_FILE)) {
+    		testRunner.enqueue(cleanFile);
+    		testRunner.run(1);
+    		testRunner.assertQueueEmpty();
+    		List<MockFlowFile> results = testRunner.getFlowFilesForRelationship(VirusScanningProcessor.SUCCESS);
+    		assertTrue("1 match", results.size() == 1);
+    	} catch (IOException e) {
+			e.printStackTrace();
+		}
 
     }
 

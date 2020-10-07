@@ -20,10 +20,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.apache.nifi.annotation.behavior.ReadsAttribute;
 import org.apache.nifi.annotation.behavior.ReadsAttributes;
@@ -118,17 +121,33 @@ public class VirusScanningProcessor extends AbstractProcessor {
     public void onScheduled(final ProcessContext context) {
 
     }
-    
-    public static String scanStream(InputStream inputStream, String scannerIp, Integer scannerPort) throws IOException, NoSuchAlgorithmException {
+//  
+//  private String getListOfViruses(Map<String, Collection<String>> viruses) {
+//  	String returnString = viruses.entrySet()
+//  			.stream()
+//  			.map(entry -> entry.getKey() + " - " + entry.getValue())
+//  			.collect(Collectors.joining(","));
+//  	return returnString;
+//  }
+    public VirusScanningReturnObject scanStream(InputStream inputStream, String scannerIp, Integer scannerPort) throws IOException, NoSuchAlgorithmException {
+    	VirusScanningReturnObject vsro = new VirusScanningReturnObject();
     	try {
+    		
         	ClamavClient client = new ClamavClient(scannerIp, scannerPort);
         	ScanResult scanResult = client.scan(inputStream);
         	if (scanResult instanceof ScanResult.OK) {
-        		return "OK";
+        		vsro.setRelationship(SUCCESS); 
         	} else if (scanResult instanceof ScanResult.VirusFound) {
-        		return "VIRUS";
+        		Map<String, Collection<String>> virusMap = ((ScanResult.VirusFound) scanResult).getFoundViruses();
+        		virusMap.forEach((k,v) -> {
+        			vsro.setVirusList(k);
+        			vsro.setVirusList(": "+v.stream()
+        							    .collect(Collectors.joining(",")));
+        			//v.forEach(virusString -> vsro.setVirusList(virusString));
+        		});
+        		vsro.setRelationship(VIRUS_FOUND);
         	} else {
-        		return "ERROR";
+        		vsro.setRelationship(ERROR);
         	}
     	} finally {
             try {
@@ -139,81 +158,8 @@ public class VirusScanningProcessor extends AbstractProcessor {
                 System.out.println("Exception occurred while closing inputStream = {} "+ e.getMessage());
             }
     	}
+    	return vsro;
     }
-
- /*   public static String scanStream(InputStream inputStream, String scannerIp, Integer scannerPort) throws IOException, NoSuchAlgorithmException {
-        Socket socket = null;
-        OutputStream outStream = null;
-        InputStream inStream = null;
-        String returnString = null;
- //       String scannerEndpoint = "http://172.17.0.3:8080/scan";
-        //curl -F "name=blabla" -F "file=@/tmp/k/eicar.com" http://172.17.0.3:8080/scan
-        try {
-            socket = new Socket(scannerIp, scannerPort);
-            outStream = new BufferedOutputStream(socket.getOutputStream());
-            socket.setSoTimeout(2000);
-            outStream.write("zINSTREAM\0".getBytes(StandardCharsets.UTF_8));
-            outStream.flush();
-            byte[] buffer = new byte[2048];
-            try {
-            	
-                inStream = socket.getInputStream();
-                int read = inputStream.read(buffer);
-                while (read >= 0) {
-                    byte[] chunkSize = ByteBuffer.allocate(4).putInt(read).array();
-                    outStream.write(chunkSize);
-                    outStream.write(buffer, 0, read);
-                    if (inStream.available() > 0) {
-                        byte[] reply = IOUtils.toByteArray(inStream);
-                        throw new IOException("Reply from server: " + new String(reply, StandardCharsets.UTF_8));
-                    }
-                    read = inputStream.read(buffer);
-                }
-                outStream.write(new byte[]{0,0,0,0});
-                outStream.flush();
-                returnString = new String(IOUtils.toByteArray(inputStream));
-                
-            } finally {
-                try {
-                    if (inputStream != null){
-                        inputStream.close();
-                    }
-                } catch (IOException e) {
-                    System.out.println("Exception occurred while closing inputStream = {} "+ e.getMessage());
-                }
-                try {
-                    if (outStream != null){
-                    	outStream.close();
-                    }
-                } catch (IOException e) {
-                    System.out.println("Exception occurred while closing outStream = {} "+ e.getMessage());
-                }
-            }
-        }finally {
-            try {
-                if(socket != null)
-                    socket.close();
-            } catch (IOException e) {
-                System.out.println("Exception occurred while closing socket = {} "+ e.getMessage());
-            }
-            try {
-                if(inStream != null)
-                    inStream.close();
-            } catch(IOException e) {
-                System.out.println("Exception occurred while closing input streams = {} "+ e.getMessage());
-            }
-            try {
-                if(outStream != null)
-                    outStream.close();
-            } catch(IOException e) {
-                System.out.println("Exception occurred while closing output streams = {} "+ e.getMessage());
-            }
-        }
-        return returnString;
-    }
-
-*/
-
 
     @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
@@ -225,19 +171,13 @@ public class VirusScanningProcessor extends AbstractProcessor {
         	System.out.println("About to scan");
         	String scannerIp = context.getProperty(VIRUS_SCANNER_IP).getValue();
         	Integer scannerPort = Integer.valueOf(context.getProperty(VIRUS_SCANNER_PORT).getValue());
-            String result = scanStream(inputStream, scannerIp, scannerPort);
-            session.putAttribute(flowFile, "scanResult", result);
-            if ("OK".equals(result)) {
-                session.transfer(flowFile, SUCCESS);
-            } else if ("VIRUS".equals(result)) {
-            	session.transfer(flowFile, VIRUS_FOUND);
-            } else {
-                session.transfer(flowFile, ERROR);            	
-            }
+        	VirusScanningReturnObject vsro = scanStream(inputStream, scannerIp, scannerPort);
+        	if (vsro.getRelationship().equals(VIRUS_FOUND))
+        		session.putAttribute(flowFile, "Virus List", vsro.getVirusList());
+            session.transfer(flowFile, vsro.getRelationship());
         } catch (IOException | NoSuchAlgorithmException e) {
             e.printStackTrace();
-            flowFile = session.putAttribute(flowFile, "log", e.getMessage());
-            session.putAttribute(flowFile, "Virus", e.getMessage());
+            session.putAttribute(flowFile, "Error", e.getMessage());
             session.transfer(flowFile, ERROR);
             
         }
